@@ -79,10 +79,45 @@ async def analyze_face(file: UploadFile = File(...)):
         skin_tone = classify_skin_tone(brightness)
 
         recommended_colors_map = {
-            "putih": ["soft pink", "peach", "nude", "baby blue"],
-            "kuning_langsat": ["dusty pink", "olive", "cream", "terracotta"],
-            "sawo_matang": ["mocha", "maroon", "mustard", "army green"],
-            "gelap": ["emerald", "navy", "burgundy", "gold"],
+            "putih": [
+                "Black",
+                "Navy",
+                "Dusty Pink",
+                "Sky Blue",
+                "Soft Yellow",
+                "Ivory",
+            ],
+            "kuning_langsat": [
+                "Coral",
+                "Peach",
+                "Dusty Pink",
+                "Sky Blue",
+                "Soft Yellow",
+                "Ivory",
+                "Biscuit",
+            ],
+            "sawo_matang": [
+                "Ivory",
+                "Biscuit",
+                "Latte",
+                "Taupe",
+                "Golden Brown",
+                "Dark Brown",
+                "Dusty Pink",
+                "Coral",
+                "Peach",
+                "Navy",
+            ],
+            "gelap": [
+                "Ivory",
+                "Pearl",
+                "Sky Blue",
+                "Soft Yellow",
+                "Dusty Pink",
+                "Coral",
+                "Peach",
+                "Golden Brown",
+            ],
         }
 
         return {
