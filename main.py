@@ -2,6 +2,10 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
+import joblib
+import os
+
+from recommendation import recommended_colors_map
 
 app = FastAPI()
 
@@ -13,6 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MODEL_PATH = "skin_tone_model.pkl"
+model = joblib.load(MODEL_PATH)
+
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
@@ -21,14 +28,25 @@ face_cascade = cv2.CascadeClassifier(
 def home():
     return {"message": "Glow Match API aktif"}
 
-def classify_skin_tone(brightness):
-    if brightness > 175:
-        return "putih"
-    elif brightness > 140:
-        return "kuning_langsat"
-    elif brightness > 105:
-        return "sawo_matang"
-    return "gelap"
+def extract_features(face):
+    face = cv2.resize(face, (64, 64))
+
+    lab = cv2.cvtColor(face, cv2.COLOR_BGR2LAB)
+    hsv = cv2.cvtColor(face, cv2.COLOR_BGR2HSV)
+
+    features = [[
+        np.mean(face[:, :, 0]),
+        np.mean(face[:, :, 1]),
+        np.mean(face[:, :, 2]),
+        np.mean(lab[:, :, 0]),
+        np.mean(lab[:, :, 1]),
+        np.mean(lab[:, :, 2]),
+        np.mean(hsv[:, :, 0]),
+        np.mean(hsv[:, :, 1]),
+        np.mean(hsv[:, :, 2]),
+    ]]
+
+    return features
 
 @app.post("/analyze-face")
 async def analyze_face(file: UploadFile = File(...)):
@@ -46,79 +64,23 @@ async def analyze_face(file: UploadFile = File(...)):
 
         faces = face_cascade.detectMultiScale(gray_full, 1.3, 5)
 
-        if len(faces) > 0:
-            x, y, w, h = faces[0]
-            face = img[y:y+h, x:x+w]
-        else:
-            face = img
+        if len(faces) == 0:
+            return {
+                "error": "Wajah tidak terdeteksi. Pastikan wajah terlihat jelas, tidak terlalu gelap, dan menghadap kamera."
+            }
 
-        face = cv2.resize(face, (240, 240))
+        x, y, w, h = faces[0]
+        face = img[y:y+h, x:x+w]
 
-        # Area sampel:
-        # dahi, pipi kiri, pipi kanan
-        forehead = face[35:75, 90:150]
-        left_cheek = face[105:155, 45:95]
-        right_cheek = face[105:155, 145:195]
+        features = extract_features(face)
 
-        sample_regions = [forehead, left_cheek, right_cheek]
+        skin_tone = model.predict(features)[0]
 
-        brightness_values = []
-        lab_l_values = []
+        gray_face = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+        brightness = float(np.mean(gray_face))
 
-        for region in sample_regions:
-            gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-            brightness_values.append(np.mean(gray_region))
-
-            lab_region = cv2.cvtColor(region, cv2.COLOR_BGR2LAB)
-            l_channel = lab_region[:, :, 0]
-            lab_l_values.append(np.mean(l_channel))
-
-        brightness = float(np.mean(brightness_values))
-        lab_l = float(np.mean(lab_l_values))
-
-        skin_tone = classify_skin_tone(brightness)
-
-        recommended_colors_map = {
-            "putih": [
-                "Black",
-                "Navy",
-                "Dusty Pink",
-                "Sky Blue",
-                "Soft Yellow",
-                "Ivory",
-            ],
-            "kuning_langsat": [
-                "Coral",
-                "Peach",
-                "Dusty Pink",
-                "Sky Blue",
-                "Soft Yellow",
-                "Ivory",
-                "Biscuit",
-            ],
-            "sawo_matang": [
-                "Ivory",
-                "Biscuit",
-                "Latte",
-                "Taupe",
-                "Golden Brown",
-                "Dark Brown",
-                "Dusty Pink",
-                "Coral",
-                "Peach",
-                "Navy",
-            ],
-            "gelap": [
-                "Ivory",
-                "Pearl",
-                "Sky Blue",
-                "Soft Yellow",
-                "Dusty Pink",
-                "Coral",
-                "Peach",
-                "Golden Brown",
-            ],
-        }
+        lab_face = cv2.cvtColor(face, cv2.COLOR_BGR2LAB)
+        lab_l = float(np.mean(lab_face[:, :, 0]))
 
         return {
             "skin_tone": skin_tone,
