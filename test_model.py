@@ -1,29 +1,40 @@
 import cv2
 import numpy as np
-import joblib
+from tensorflow.keras.models import load_model
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
-model = joblib.load("skin_tone_model.pkl")
+MODEL_PATH = "models/glowmatch_mobilenetv2.keras"
 
-img_path = "dataset/fairface/fairface/train/1.jpg"
+CLASS_NAMES = [
+    "putih",
+    "kuning_langsat",
+    "sawo_matang",
+    "gelap"
+]
+
+model = load_model(MODEL_PATH)
+
+img_path = "16.jpg" 
 
 img = cv2.imread(img_path)
-img = cv2.resize(img, (64, 64))
 
-lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+if img is None:
+    raise ValueError("Gambar tidak ditemukan")
 
-features = [[
-    np.mean(img[:, :, 0]),
-    np.mean(img[:, :, 1]),
-    np.mean(img[:, :, 2]),
-    np.mean(lab[:, :, 0]),
-    np.mean(lab[:, :, 1]),
-    np.mean(lab[:, :, 2]),
-    np.mean(hsv[:, :, 0]),
-    np.mean(hsv[:, :, 1]),
-    np.mean(hsv[:, :, 2]),
-]]
+img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+img = cv2.resize(img, (160, 160))
+img = preprocess_input(img.astype(np.float32))
 
-prediction = model.predict(features)[0]
+img = np.expand_dims(img, axis=0)
 
-print("Prediksi warna kulit:", prediction)
+prediction = model.predict(img, verbose=0)[0]
+
+predicted_class = np.argmax(prediction)
+confidence = prediction[predicted_class] * 100
+
+print("Prediksi :", CLASS_NAMES[predicted_class])
+print("Confidence :", f"{confidence:.2f}%")
+
+print("\nSemua Probabilitas:")
+for cls, prob in zip(CLASS_NAMES, prediction):
+    print(f"{cls}: {prob*100:.2f}%")

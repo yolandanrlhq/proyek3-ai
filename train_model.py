@@ -1,18 +1,43 @@
 import os
-import pandas as pd
 import cv2
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-import joblib
+import pandas as pd
+import tensorflow as tf
 
-CSV_PATH = "dataset/fitz_undersampled_train_final.csv"
-IMAGE_FOLDER = "dataset/fairface/fairface/train"
+from sklearn.utils.class_weight import compute_class_weight
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
-# ambil data
-df = pd.read_csv(CSV_PATH)
+# =========================
+# CONFIG
+# =========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def map_skin_tone(phototype):
-    if phototype == "I & II":
+TRAIN_CSV = os.path.join(BASE_DIR, "dataset", "fitz_undersampled_train_final.csv")
+VAL_CSV = os.path.join(BASE_DIR, "dataset", "fitz_undersampled_test_final.csv")
+
+TRAIN_IMG_DIR = os.path.join(BASE_DIR, "dataset", "fairface", "fairface", "train")
+VAL_IMG_DIR = os.path.join(BASE_DIR, "dataset", "fairface", "fairface", "val")
+
+MODEL_DIR = os.path.join(BASE_DIR, "models")
+MODEL_PATH = os.path.join(MODEL_DIR, "glowmatch_mobilenetv2.keras")
+
+IMG_SIZE = 160
+BATCH_SIZE = 16
+EPOCHS = 20
+
+CLASS_NAMES = ["putih", "kuning_langsat", "sawo_matang", "gelap"]
+
+# =========================
+# LABEL MAPPING
+# =========================
+def map_phototype_to_skin_tone(phototype):
+    phototype = str(phototype).strip()
+
+    if phototype in ["I & II"]:
         return "putih"
     elif phototype == "III":
         return "kuning_langsat"
@@ -20,72 +45,199 @@ def map_skin_tone(phototype):
         return "sawo_matang"
     elif phototype == "VI":
         return "gelap"
-    return None
+    else:
+        return None
 
-df["skin_tone"] = df["phototype"].apply(map_skin_tone)
-df = df.dropna()
 
-# BATASIN DULU BIAR GA LAMA
-df = df.sample(min(1000, len(df)), random_state=42)
+def load_dataset(csv_path, image_dir):
+    df = pd.read_csv(csv_path)    
 
-X = []
-y = []
+    if len(df) > 1000:
+        df = df.sample(n=1000, random_state=42)
 
-print("Total baris CSV yang dipakai:", len(df))
+    images = []
+    labels = []
 
-for i, (_, row) in enumerate(df.iterrows(), start=1):
-    img_path = os.path.join(IMAGE_FOLDER, row["file"])
+    for _, row in df.iterrows():
+        filename = str(row["file"]).strip()
+        phototype = row["phototype"]
 
-    if not os.path.exists(img_path):
-        print("File tidak ada:", img_path)
-        continue
+        skin_tone = map_phototype_to_skin_tone(phototype)
+        if skin_tone is None:
+            continue
 
-    img = cv2.imread(img_path)
+        image_path = os.path.join(image_dir, filename)
 
-    if img is None:
-        print("Gagal baca:", img_path)
-        continue
+        if not os.path.exists(image_path):
+            print(f"File tidak ditemukan: {image_path}")
+            continue
 
-    img = cv2.resize(img, (64, 64))
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"Gagal membaca gambar: {image_path}")
+            continue
 
-    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        img = preprocess_input(img.astype(np.float32))
 
-    features = [
-        np.mean(img[:, :, 0]),
-        np.mean(img[:, :, 1]),
-        np.mean(img[:, :, 2]),
-        np.mean(lab[:, :, 0]),
-        np.mean(lab[:, :, 1]),
-        np.mean(lab[:, :, 2]),
-        np.mean(hsv[:, :, 0]),
-        np.mean(hsv[:, :, 1]),
-        np.mean(hsv[:, :, 2]),
-    ]
+        label_index = CLASS_NAMES.index(skin_tone)
 
-    X.append(features)
-    y.append(row["skin_tone"])
+        images.append(img)
+        labels.append(label_index)
 
-    if i % 100 == 0:
-        print(f"Sudah proses {i}/{len(df)} gambar")
+    return np.array(images, dtype=np.float32), np.array(labels, dtype=np.int32)
 
-X = np.array(X)
-y = np.array(y)
 
-print("Total data valid:", len(X))
+# =========================
+# LOAD DATA
+# =========================
+print("Loading train data...")
+print("Jumlah data train:", len(pd.read_csv(TRAIN_CSV)))
 
-if len(X) == 0:
-    print("ERROR: Tidak ada gambar yang berhasil dibaca. Cek IMAGE_FOLDER atau isi kolom file di CSV.")
-    exit()
+X_train, y_train = load_dataset(TRAIN_CSV, TRAIN_IMG_DIR)
 
-model = RandomForestClassifier(
-    n_estimators=50,
-    random_state=42,
-    n_jobs=-1
+print("Loading validation data...")
+print("Jumlah data val:", len(pd.read_csv(VAL_CSV)))
+X_val, y_val = load_dataset(VAL_CSV, VAL_IMG_DIR)
+
+print("Train data:", X_train.shape, y_train.shape)
+print("Validation data:", X_val.shape, y_val.shape)
+
+unique, counts = np.unique(y_train, return_counts=True)
+
+print("Distribusi kelas:")
+for u, c in zip(unique, counts):
+    print(CLASS_NAMES[u], c)
+
+if len(X_train) == 0:
+    raise ValueError("Data training kosong. Cek path CSV dan folder gambar.")
+
+if len(X_val) == 0:
+    raise ValueError("Data validasi kosong. Cek path CSV dan folder gambar.")
+
+# =========================
+# CLASS WEIGHT
+# =========================
+class_weights = compute_class_weight(
+    class_weight="balanced",
+    classes=np.unique(y_train),
+    y=y_train
 )
 
-model.fit(X, y)
+class_weights = dict(enumerate(class_weights))
+print("Class weights:", class_weights)
 
-joblib.dump(model, "skin_tone_model.pkl")
+# =========================
+# DATA AUGMENTATION
+# =========================
+data_augmentation = tf.keras.Sequential([
+    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomRotation(0.08),
+    tf.keras.layers.RandomZoom(0.1),
+    tf.keras.layers.RandomContrast(0.1),
+])
 
-print("Model berhasil disimpan!")
+# =========================
+# MODEL
+# =========================
+base_model = MobileNetV2(
+    input_shape=(IMG_SIZE, IMG_SIZE, 3),
+    include_top=False,
+    weights="imagenet"
+)
+
+base_model.trainable = False
+
+inputs = tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+x = data_augmentation(inputs)
+x = base_model(x, training=False)
+x = GlobalAveragePooling2D()(x)
+x = Dropout(0.35)(x)
+x = Dense(128, activation="relu")(x)
+x = Dropout(0.25)(x)
+outputs = Dense(len(CLASS_NAMES), activation="softmax")(x)
+
+model = Model(inputs, outputs)
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+model.summary()
+
+# =========================
+# CALLBACKS
+# =========================
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+callbacks = [
+    ModelCheckpoint(
+        MODEL_PATH,
+        monitor="val_accuracy",
+        save_best_only=True,
+        mode="max",
+        verbose=1
+    ),
+    EarlyStopping(
+        monitor="val_accuracy",
+        patience=5,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.3,
+        patience=3,
+        min_lr=1e-7,
+        verbose=1
+    )
+]
+
+# =========================
+# TRAIN HEAD
+# =========================
+print("Training classifier head...")
+
+model.fit(
+    X_train,
+    y_train,
+    validation_data=(X_val, y_val),
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    class_weight=class_weights,
+    callbacks=callbacks
+)
+
+# =========================
+# FINE TUNING
+# =========================
+print("Fine tuning MobileNetV2...")
+
+base_model.trainable = True
+
+for layer in base_model.layers[:-30]:
+    layer.trainable = False
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.00005),
+    loss="sparse_categorical_crossentropy",
+    metrics=["accuracy"]
+)
+
+model.fit(
+    X_train,
+    y_train,
+    validation_data=(X_val, y_val),
+    epochs=10,
+    batch_size=BATCH_SIZE,
+    class_weight=class_weights,
+    callbacks=callbacks
+)
+
+model.save(MODEL_PATH)
+
+print("Model berhasil disimpan di:")
+print(MODEL_PATH)
