@@ -14,7 +14,7 @@ CLASS_NAMES = [
 
 model = load_model(MODEL_PATH)
 
-img_path = "16.jpg" 
+img_path = "images/14.jpg" 
 
 img = cv2.imread(img_path)
 

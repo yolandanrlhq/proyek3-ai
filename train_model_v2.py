@@ -89,6 +89,8 @@ def load_image(path, label):
 
     image = preprocess_input(image)
 
+    label = tf.one_hot(label, depth=len(CLASS_NAMES))
+
     return image, label
 
 # =========================
@@ -200,8 +202,8 @@ outputs = Dense(len(CLASS_NAMES), activation="softmax")(x)
 model = Model(inputs, outputs)
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
-    loss="sparse_categorical_crossentropy",
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.00002), 
+    loss="categorical_crossentropy",
     metrics=["accuracy"]
 )
 
@@ -259,8 +261,8 @@ for layer in base_model.layers[:-30]:
     layer.trainable = False
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.00005),
-    loss="sparse_categorical_crossentropy",
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0002),
+    loss="categorical_crossentropy",
     metrics=["accuracy"]
 )
 
